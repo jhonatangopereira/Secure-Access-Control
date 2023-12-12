@@ -30,42 +30,52 @@ char tolken[50];
 #define MQTT_TOPIC_REQUEST "token/access"
 #define MQTT_TOPIC_RESPONSE "token/response"
 
-// Função para enviar mensagem MQTT
-void enviarMensagemMQTT(const char *topic, const char *message) {
-    // Inicialize o cliente MQTT
-    MQTTClient client;
-    MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
-    MQTTClient_message pubmsg = MQTTClient_message_initializer;
-    MQTTClient_deliveryToken token;
 
-    // Conecte-se ao servidor MQTT
-    MQTTClient_create(&client, MQTT_SERVER, "ClientID", MQTTCLIENT_PERSISTENCE_NONE, NULL);
-    conn_opts.keepAliveInterval = 20;
-    conn_opts.cleansession = 1;
-
-    if (MQTTClient_connect(client, &conn_opts) != MQTTCLIENT_SUCCESS) {
-        printf("Falha ao conectar ao servidor MQTT\n");
-        return;
+static esp_err_t mqtt_event_handler(esp_mqtt_event_handle_t event)
+{
+    // Lógica de tratamento de eventos MQTT
+    switch (event->event_id) {
+        case MQTT_EVENT_CONNECTED:
+            printf("Conectado ao servidor MQTT\n");
+            break;
+        case MQTT_EVENT_DISCONNECTED:
+            printf("Desconectado do servidor MQTT\n");
+            break;
+        default:
+            break;
     }
+    return ESP_OK;
+}
 
-    // Envie a mensagem para o tópico MQTT
-    pubmsg.payload = message;
-    pubmsg.payloadlen = strlen(message);
-    pubmsg.qos = 1;
-    pubmsg.retained = 0;
-    MQTTClient_publishMessage(client, topic, &pubmsg, &token);
+void enviarMensagemMQTT(const char *message)
+{
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .uri = MQTT_SERVER,
+    };
 
-    MQTTClient_disconnect(client, 10000);
-    MQTTClient_destroy(&client);
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, client);
+    esp_mqtt_client_start(client);
+
+    // Espera pela conexão ao servidor MQTT
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    // Envia a mensagem para o tópico especificado
+    int msg_id = esp_mqtt_client_publish(client, MQTT_TOPIC_REQUEST, message, 0, 1, 0);
+    printf("Mensagem enviada: %s\n", message);
+    printf("Mensagem ID: %d\n", msg_id);
+
+    // Espera pela confirmação da entrega da mensagem
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    esp_mqtt_client_stop(client);
+    esp_mqtt_client_destroy(client);
 }
 
 // Write data to ESP32 defined as server
 static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     char * data = (char *)ctxt->om->om_data;
-    char textoRec = data;
-    uint16_t * tam = ctxt->om->om_len;
-
     printf("Data from the client: %.*s\n", ctxt->om->om_len, ctxt->om->om_data);
     for(int i = 0; i < ctxt->om->om_len; i++){
         tolken[i] = ctxt->om->om_data[i];
@@ -74,7 +84,7 @@ static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_g
     printf("\n");
 
     // Subscrever ao tópico de resposta MQTT
-    enviarMensagemMQTT(MQTT_TOPIC_REQUEST, tolken);
+    enviarMensagemMQTT(tolken);
 
     memset(tolken, 0, sizeof(tolken));
     
@@ -201,11 +211,11 @@ static void init_led(void)
 
 
 // Função para tratar mensagens MQTT recebidas
-int mensagemMQTTCallback(void* context, char* topicName, int topicLen, MQTTClient_message* message) {
-    printf("Mensagem recebida no tópico %s: %.s\n", topicName, message->payloadlen, (char)message->payload);
+void mensagemMQTTCallback(void *handler_args, esp_mqtt_event_handle_t event) {
+    printf("Mensagem recebida no tópico %.*s: %.*s\n", event->topic_len, event->topic, event->data_len, event->data);
 
     // Processar a mensagem recebida e acionar/desacionar o gpio_set_level conforme necessário
-    if (strcmp((char*)message->payload, "ok") == 0) {
+    if (strncmp((char *)event->data, "ok", event->data_len) == 0) {
         gpio_set_level(Rele, 0);
         gpio_set_level(ledG, 1);
 
@@ -216,55 +226,31 @@ int mensagemMQTTCallback(void* context, char* topicName, int topicLen, MQTTClien
         gpio_set_level(Rele, 1);
         gpio_set_level(ledG, 0);
     }
-
-    MQTTClient_freeMessage(&message);
-    MQTTClient_free(topicName);
-
-    return 1;
 }
-
-// Write data to ESP32 defined as server
-static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
-    gpio_set_level(ledR, 1);
-    char * data = (char *)ctxt->om->om_data;
-    char textoRec = data;
-    uint16_t * tam = ctxt->om->om_len;
-
-    printf("Data from the client: %.*s\n", ctxt->om->om_len, ctxt->om->om_data);
-    for(int i = 0; i < ctxt->om->om_len; i++){
-        tolken[i] = ctxt->om->om_data[i];
-    }
-    printf("%s\n", tolken);
-    printf("\n");
-
-    // Envie o token como requisição para a comparação MQTT
-    enviarMensagemMQTT(MQTT_TOPIC_REQUEST, tolken);
-
-    memset(tolken, 0, sizeof(tolken));
-
-    return 0;
-}
-
-// ... (restante do código)
 
 void app_main()
 {   
     init_led();
     connectBLE();
 
-    // Configurar MQTT
-    MQTTClient client;
-    MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
-    conn_opts.keepAliveInterval = 20;
-    conn_opts.cleansession = 1;
-    MQTTClient_create(&client, MQTT_SERVER, "ClientID", MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    // Configurar e iniciar o cliente MQTT
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .uri = MQTT_SERVER,
+    };
+
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, client);
+    esp_mqtt_client_start(client);
 
     while (1) {
         // Lidar com mensagens MQTT recebidas
-        MQTTClient_message message;
-        if (MQTTClient_receive(client, &message, 1000) == MQTTCLIENT_SUCCESS) {
-            mensagemMQTTCallback(NULL, MQTT_TOPIC_RESPONSE, strlen(MQTT_TOPIC_RESPONSE), &message);
+        esp_mqtt_client_subscribe(client, MQTT_TOPIC_RESPONSE, 0); // Subscrever ao tópico MQTT
+
+        esp_mqtt_event_handle_t event = NULL; // Evento para receber a mensagem
+        esp_err_t err = esp_mqtt_client_wait_for_data(client, &event, 1000); // Esperar por dados por até 1000 ms
+
+        if (err == ESP_OK && event != NULL) {
+            mensagemMQTTCallback(NULL, event); // Chama a função de manipulação de mensagens MQTT
         }
     }
 }
