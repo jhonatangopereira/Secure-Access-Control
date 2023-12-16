@@ -1,6 +1,6 @@
 # Secure-Access-Control
 
-Controle de acesso inteligente com comunicação via Bluetooth. Tem como objetivo fornecer segurança e otimize a gestão de autorizações em um ambiente de Smart Campus. Para alcançar tal feito, foi construído este repositório, responsável por configurar e estabelecer as conexões e processamentos necessários para que o controle seja feito corretamente.
+Controle de acesso inteligente com comunicação via Bluetooth. Tem como objetivo fornecer segurança e otimizar a gestão de autorizações em um ambiente de Smart Campus. Para alcançar tal feito, foi construído este repositório, responsável por configurar e estabelecer as conexões e processamentos necessários para que o controle seja feito corretamente.
 
 ## Componentes utilizados
 
